@@ -898,6 +898,7 @@ def init_devnet(
     image=IMAGE,
     cmd=None,
     gen_compose_file=False,
+    resume=False,
 ):
     """
     init data directory
@@ -938,7 +939,71 @@ def init_devnet(
 
     process_config(config, base_port)
 
+    # Always write the config.json as it's needed for reference
     (data_dir / "config.json").write_text(json.dumps(config))
+
+    # If resuming, skip most initialization steps and only update configs
+    if resume:
+        # First collect all node IDs from existing files
+        node_ids = {}
+        for i, val in enumerate(config["validators"]):
+            node_dir = data_dir / f"node{i}"
+            if node_dir.exists():
+                node_key_file = node_dir / "config/node_key.json"
+                if node_key_file.exists():
+                    node_ids[i] = node_id_from_file(node_key_file)
+
+        # Create peers string with valid node IDs
+        peers = config.get("peers")
+        if not peers:
+            peers = []
+            for i, val in enumerate(config["validators"]):
+                if i in node_ids and node_ids[i]:  # Only include nodes with valid IDs
+                    peers.append(
+                        "tcp://%s@%s:%d"
+                        % (
+                            node_ids[i],
+                            val["hostname"],
+                            ports.p2p_port(val["base_port"]),
+                        )
+                    )
+            peers = ",".join(peers)
+
+        for i, val in enumerate(config["validators"]):
+            # Make sure the node directory exists
+            node_dir = data_dir / f"node{i}"
+            if not node_dir.exists():
+                continue
+
+            # Skip this node in peers list if we have its ID
+            clean_peers = peers
+            if i in node_ids and node_ids[i]:
+                self_peer = "tcp://%s@%s:%d" % (
+                    node_ids[i],
+                    val["hostname"],
+                    ports.p2p_port(val["base_port"]),
+                )
+                clean_peers = try_remove_peer(peers, self_peer)
+
+            # Update config.toml
+            edit_tm_cfg(
+                node_dir / "config/config.toml",
+                val["base_port"],
+                clean_peers,
+                jsonmerge.merge(config.get("config", {}), val.get("config", {})),
+            )
+
+            # Update app.toml
+            edit_app_cfg(
+                node_dir / "config/app.toml",
+                val["base_port"],
+                jsonmerge.merge(
+                    config.get("app-config", {}), val.get("app-config", {})
+                ),
+            )
+
+        # Skip the rest of the initialization steps
+        return
 
     cmd = cmd or config.get("cmd") or CHAIN
 
@@ -1235,6 +1300,7 @@ def init_cluster(
     cmd=None,
     gen_compose_file=False,
     relayer=Relayer.HERMES.value,
+    resume=False,
 ):
     is_hermes = relayer == Relayer.HERMES.value
     extension = Path(config_path).suffix
@@ -1257,9 +1323,17 @@ def init_cluster(
         cmds = [None] * len(chains)
 
     for chain, cmd in zip(chains, cmds):
-        (data_dir / chain["chain_id"]).mkdir()
+        # Skip directory creation if resuming
+        if not resume:
+            (data_dir / chain["chain_id"]).mkdir()
         init_devnet(
-            data_dir / chain["chain_id"], chain, base_port, image, cmd, gen_compose_file
+            data_dir / chain["chain_id"],
+            chain,
+            base_port,
+            image,
+            cmd,
+            gen_compose_file,
+            resume,
         )
     with (data_dir / SUPERVISOR_CONFIG_FILE).open("w") as fp:
         write_ini(
@@ -1356,6 +1430,17 @@ def init_cluster(
 def find_account(data_dir, chain_id, name):
     accounts = json.load((data_dir / chain_id / "accounts.json").open())
     return next(acct for acct in accounts if acct["name"] == name)
+
+
+def node_id_from_file(node_key_file):
+    """
+    Read node ID from node_key.json file
+    """
+    if not node_key_file.exists():
+        return ""
+    with open(node_key_file) as f:
+        data = json.load(f)
+    return data.get("id", "")
 
 
 def supervisord_ini(cmd, validators, chain_id, start_flags=""):

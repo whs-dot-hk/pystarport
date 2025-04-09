@@ -23,11 +23,17 @@ def init(
     base_port,
     dotenv,
     *args,
-    no_remove=False,
+    resume=False,
     relayer=Relayer.HERMES.value,
     **kwargs,
 ):
-    if not no_remove:
+    """
+    Initialize a new cluster or resume from current state
+
+    :param resume: if True, resume from current state instead of removing data directory
+    """
+    # Don't remove data directory if resume is True
+    if not resume:
         interact(
             f"rm -r {data}; mkdir {data}",
             ignore_error=True,
@@ -38,12 +44,18 @@ def init(
         base_port,
         dotenv,
         relayer=relayer,
+        resume=resume,
         *args,
         **kwargs,
     )
 
 
-def start(data, quiet):
+def start(data, quiet, resume=False):
+    """
+    Start a prepared cluster
+
+    :param resume: if True, resume from current state (has no effect on start, included for API consistency)
+    """
     supervisord = start_cluster(data)
 
     # register signal to quit supervisord
@@ -67,10 +79,21 @@ def serve(
     dotenv,
     cmd,
     quiet,
-    no_remove=False,
+    resume=False,
     relayer=Relayer.HERMES.value,
 ):
-    init(data, config, base_port, dotenv, cmd=cmd, no_remove=no_remove, relayer=relayer)
+    """
+    Prepare and start a devnet
+
+    :param resume: if True, resume from current state instead of removing data directory
+    """
+    if resume:
+        print(f"Resuming chain from existing state in {data}")
+
+    # Initialize with resume flag
+    init(data, config, base_port, dotenv, cmd=cmd, resume=resume, relayer=relayer)
+
+    # Start the chain
     start(data, quiet)
 
 
@@ -89,7 +112,7 @@ class CLI:
         dotenv: str = None,
         image: str = IMAGE,
         gen_compose_file: bool = False,
-        no_remove: bool = False,
+        resume: bool = False,
         relayer: str = Relayer.HERMES.value,
     ):
         """
@@ -102,7 +125,7 @@ class CLI:
         :param dotenv: path to .env file
         :param image: the image used in the generated docker-compose.yml
         :param gen_compose_file: generate a docker-compose.yml
-        :param no_remove: don't remove existing data directory
+        :param resume: resume from current state instead of restart the chain
         """
         init(
             Path(data),
@@ -112,18 +135,19 @@ class CLI:
             image,
             self.cmd,
             gen_compose_file,
-            no_remove=no_remove,
+            resume=resume,
             relayer=relayer,
         )
 
-    def start(self, data: str = "./data", quiet: bool = False):
+    def start(self, data: str = "./data", quiet: bool = False, resume: bool = False):
         """
         start the prepared devnet
 
         :param data: path to the root data directory
         :param quiet: don't print logs of subprocesses
+        :param resume: resume from current state (has no effect on start, included for API consistency)
         """
-        start(Path(data), quiet)
+        start(Path(data), quiet, resume=resume)
 
     def chaind(self, *args, **kwargs):
         """
@@ -141,11 +165,11 @@ class CLI:
         base_port: int = 26650,
         dotenv: str = None,
         quiet: bool = False,
-        no_remove: bool = False,
+        resume: bool = False,
         relayer: str = Relayer.HERMES.value,
     ):
         """
-        prepare and start a devnet from scatch
+        prepare and start a devnet from scratch or resume from current state
 
         :param data: path to the root data directory
         :param config: path to the configuration file
@@ -153,7 +177,7 @@ class CLI:
         are calculated based on this
         :param dotenv: path to .env file
         :param quiet: don't print logs of subprocesses
-        :param no_remove: don't remove existing data directory
+        :param resume: resume from current state instead of restarting the chain
         """
         serve(
             Path(data),
@@ -162,7 +186,7 @@ class CLI:
             dotenv,
             self.cmd,
             quiet,
-            no_remove=no_remove,
+            resume=resume,
             relayer=relayer,
         )
 
